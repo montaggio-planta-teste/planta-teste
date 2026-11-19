@@ -720,7 +720,7 @@ function htmlDeConsulta(html, envio){
     + "document.addEventListener('click',function(e){var t=e.target&&e.target.closest&&e.target.closest('g.peca,#b-enviar,#faixa-fotos,#b-oc,#b-dados,#p-oc,#p-desfazer,#o-nova,#o-foto-bt,#env-abrir,#env-so-fotos,#env-fila-bt,[data-foto],.b-foto,input[type=file]');"
     + "if(t){e.stopPropagation();e.preventDefault();try{parent.Nucleo&&parent.Nucleo._avisoConsulta&&parent.Nucleo._avisoConsulta(t.matches&&t.matches('g.peca')?t.id:null);}catch(_){}}},true);"
     + "}catch(e){}})();<\/script>"
-    + "<style>#b-enviar,#faixa-fotos,#f-env,#b-oc,#b-dados,#p-oc,#p-desfazer,#o-nova,#o-foto-bt,.b-foto,input[type=file]{display:none!important}</style>";
+    + "<style>#b-enviar,#faixa-fotos,#faixa-par,#f-env,#b-oc,#b-dados,#p-oc,#p-desfazer,#o-nova,#o-foto-bt,.b-foto,input[type=file]{display:none!important}</style>";   /* #faixa-par: na consulta as fotos não ficam na planta, a conta dela sairia errada (ensaio 19/11) */
   var i = h.search(/<head[^>]*>/i), fim = i < 0 ? 0 : i + h.match(/<head[^>]*>/i)[0].length;
   return { html: h.slice(0, fim) + inj + h.slice(fim), chave: chaveC, banco: bancoC };
 }
