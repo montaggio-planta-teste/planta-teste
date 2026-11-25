@@ -851,6 +851,78 @@ function fotosSincronizadas(obraId){
   }).catch(function(){ return { fotos: [], envios: [], ultimoEnvio: null, autor: null, sincronizadoEm: null }; });
 }
 
+/* ------------------------------------------------ HERANÇA na troca de líder (Gustavo, 25/11/2026)
+   "Um assume a obra do outro e não perde as anotações e consegue sincronizar as fotos" (Coca Itabirito).
+   Quando um líder abre a obra para MARCAR num aparelho que ainda não tem NADA dela (nenhuma peça, nenhuma
+   ocorrência, nenhuma foto), a planta começa de onde o último envio confirmado parou:
+     - peças e ocorrências do último envio completo desta planta (qualquer líder);
+     - TODAS as fotos já enviadas da obra (de todos os envios), gravadas no banco da planta como JÁ ENVIADAS
+       (não voltam no próximo ENVIAR; a peça fica verde cheio; não entram em "fotos que faltam").
+   Aparelho que já tem qualquer dado desta obra NUNCA é sobrescrito. Sem sinal ou sem envio: abre como sempre.
+   O que foi herdado fica em <chave>:herdado. -> Promise<{herdou, motivo, de, arquivo, pecas, ocs, fotos}> */
+function contarMarcas(reg, oc){
+  var p = 0, o = 0;
+  Object.keys(reg || {}).forEach(function(k){ var st = (reg[k] || {}).st; if(st && st !== "pendente") p++; });
+  if(Array.isArray(oc)) o = oc.length;
+  else Object.keys(oc || {}).forEach(function(k){ if(oc[k] && !oc[k].apagada) o++; });
+  return { pecas: p, ocs: o };
+}
+function gravarFotosNaPlanta(banco, fotos){
+  return new Promise(function(ok, falha){
+    var r = indexedDB.open(banco, 1);
+    r.onupgradeneeded = function(e){ var db = e.target.result;
+      if(!db.objectStoreNames.contains("fotos")){ var st = db.createObjectStore("fotos", { keyPath: "id", autoIncrement: true }); st.createIndex("peca", "peca", { unique: false }); } };
+    r.onsuccess = function(){ var db = r.result;
+      if(!db.objectStoreNames.contains("fotos")){ db.close(); return falha(new Error("banco da planta sem loja de fotos")); }
+      var tx = db.transaction("fotos", "readwrite"), st = tx.objectStore("fotos"), agora = new Date().toISOString();
+      fotos.forEach(function(f){
+        st.add({ peca: f.peca, alvo: f.alvo || null, quando: f.quando || agora, nome: f.nome || null, blob: f.blob,
+                 tamanho: (f.blob && f.blob.size) || 0, enviada: true, enviadaEm: agora, herdada: true, origem: "herdada", arquivoEnvio: f.arquivo || null });
+      });
+      tx.oncomplete = function(){ db.close(); ok(fotos.length); };
+      tx.onerror = function(){ var e = tx.error; db.close(); falha(e || new Error("falha ao gravar as fotos")); };
+    };
+    r.onerror = function(){ falha(r.error || new Error("não abriu o banco da planta")); };
+  });
+}
+function herdarObra(o, info, deps, aoProgresso){
+  if(!info) return Promise.resolve({ herdou: false, motivo: "planta sem adaptador" });
+  return Promise.all([lerEstadoPlanta(info), fotosDoBanco(info.banco)]).then(function(x){
+    var est = x[0], fotosJa = x[1];
+    if(fotosJa === null) return { herdou: false, motivo: "não deu para ler as fotos do aparelho" };
+    if((est && est.marcadas) || (fotosJa && fotosJa.length)) return { herdou: false, motivo: "aparelho já tem dados desta obra" };
+    return ultimoEnvioConfirmado(o, deps).then(function(env){
+      if(!env.achou) return { herdou: false, motivo: env.motivo || "nenhum envio" };
+      var m = contarMarcas(env.reg, env.oc);
+      if(!m.pecas && !m.ocs) return { herdou: false, motivo: "último envio sem nada marcado" };
+      /* fotos: todas as já enviadas desta planta (cada envio leva só as novas) */
+      return planoDeSincronia(o, deps).then(function(plano){
+        return sincronizarFotos(o, plano, deps, aoProgresso);
+      }).then(function(rs){
+        return fotosSincronizadas(o.id).then(function(s){ return { rs: rs, fotos: s.fotos }; });
+      }).then(function(y){
+        if(y.rs.falhas && y.rs.falhas.some(function(f){ return f.tipo !== "arquivo_ruim"; }))
+          throw new Error("não baixei todos os envios da obra (" + y.rs.falhas.length + " falha(s) de rede). Nada foi herdado; tente com sinal melhor.");
+        var fotos = (y.fotos || []).filter(function(f){ return f.blob && f.peca; });
+        /* 1º as fotos: se falharem, nada de peças (igual ao RECUPERAR da planta) */
+        return gravarFotosNaPlanta(info.banco, fotos).then(function(nf){
+          var d = null; try{ d = JSON.parse(localStorage.getItem(info.chave) || "null"); }catch(e){}
+          if(!d || typeof d !== "object") d = { v: 1, lider: "", reg: {}, ocultos: {} };
+          var agora = new Date().toISOString(), oc = env.oc || {};
+          if(!Array.isArray(oc)) Object.keys(oc).forEach(function(k){ if(oc[k] && oc[k].txt){ oc[k].enviada = true; oc[k].enviadaEm = oc[k].enviadaEm || agora; } });
+          d.v = d.v || 1; d.reg = env.reg || {}; d.ocultos = d.ocultos || {}; if(!d.lider) d.lider = env.lider || "";
+          var h = { de: env.lider || null, autor: env.autor || null, arquivo: env.arquivo, exportadoEm: env.exportadoEm || null,
+                    em: agora, pecas: m.pecas, ocs: m.ocs, fotos: nf };
+          localStorage.setItem(info.chave, JSON.stringify(d));
+          localStorage.setItem(info.chave + ":oc", JSON.stringify(oc));
+          localStorage.setItem(info.chave + ":herdado", JSON.stringify(h));
+          return { herdou: true, de: h.de, autor: h.autor, arquivo: h.arquivo, pecas: m.pecas, ocs: m.ocs, fotos: nf };
+        });
+      });
+    });
+  });
+}
+
 /* Planta de DEMONSTRAÇÃO ("Ver como" do ADM, só no teste): a planta inteira, tocável, mas isolada (CHAVE e banco
    com sufixo ":simulacao"/"-simulacao") e sem envio (o compartilhar recusa). Sai com limparConsulta. */
 function htmlDeSimulacao(html){
@@ -976,7 +1048,7 @@ window.Nucleo = {
   versao: "0.3-lab",
   carregarAcessos: carregarAcessos, carregarEditores: carregarEditores,
   perfilDaConta: perfilDaConta, listasDaConta: listasDaConta, editorDaObra: editorDaObra,
-  identidadeDaPlanta: identidadeDaPlanta, arquivamentoAtivo: function(){ return ARQUIVAMENTO_ATIVO; }, prazoArquivo: prazoArquivo, adiarArquivo: adiarArquivo, provarArquivamento: provarArquivamento, arquivarObra: arquivarObra, obrasParaArquivar: obrasParaArquivar, temNoAparelho: temNoAparelho, htmlDeSimulacao: htmlDeSimulacao, carregarAjustes: carregarAjustes, novoAjuste: novoAjuste, pastaHistorico: pastaHistorico, historicoDosLideres: historicoDosLideres, pendenciaDoAparelho: pendenciaDoAparelho, lembrarPlanta: lembrarPlanta, temPendencia: temPendencia, parteDoNome: parteDoNome, apagarFotosSincronizadas: apagarFotosSincronizadas, nomeDoLiderNaPlanta: nomeDoLiderNaPlanta, planoDeSincronia: planoDeSincronia, sincronizarFotos: sincronizarFotos, fotosSincronizadas: fotosSincronizadas,   carregarTrocas: carregarTrocas, pastaTrocas: pastaTrocas, novaTroca: novaTroca, podeAssumir: podeAssumir, podeMarcar: podeMarcar, resolverNome: resolverNome,
+  identidadeDaPlanta: identidadeDaPlanta, arquivamentoAtivo: function(){ return ARQUIVAMENTO_ATIVO; }, prazoArquivo: prazoArquivo, adiarArquivo: adiarArquivo, provarArquivamento: provarArquivamento, arquivarObra: arquivarObra, obrasParaArquivar: obrasParaArquivar, temNoAparelho: temNoAparelho, htmlDeSimulacao: htmlDeSimulacao, carregarAjustes: carregarAjustes, novoAjuste: novoAjuste, pastaHistorico: pastaHistorico, historicoDosLideres: historicoDosLideres, pendenciaDoAparelho: pendenciaDoAparelho, lembrarPlanta: lembrarPlanta, temPendencia: temPendencia, parteDoNome: parteDoNome, apagarFotosSincronizadas: apagarFotosSincronizadas, nomeDoLiderNaPlanta: nomeDoLiderNaPlanta, herdarObra: herdarObra, planoDeSincronia: planoDeSincronia, sincronizarFotos: sincronizarFotos, fotosSincronizadas: fotosSincronizadas,   carregarTrocas: carregarTrocas, pastaTrocas: pastaTrocas, novaTroca: novaTroca, podeAssumir: podeAssumir, podeMarcar: podeMarcar, resolverNome: resolverNome,
   modoDaObra: modoDaObra, formatoDaPlanta: formatoDaPlanta,
   envioComecou: envioComecou, envioTerminou: envioTerminou, observar: observar, estadoEnvio: estadoEnvio,
   infoDaPlanta: infoDaPlanta, lerEstadoPlanta: lerEstadoPlanta,

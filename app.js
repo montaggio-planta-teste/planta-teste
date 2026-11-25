@@ -722,14 +722,35 @@ function abrirObra(o, opc){
     tela(null); document.title = o.nome + " · Planta de Campo";
     $("faixa-nome").textContent = (MODO === "teste" ? "TESTE · " : "") + o.nome.replace(/^TESTE · /, "");
     PLANTA_INFO = Nucleo.infoDaPlanta(html); Nucleo.lembrarPlanta(o.id, PLANTA_INFO);
+    /* 25/11/2026: troca de líder / aparelho novo -> a planta começa de onde o último envio parou (Nucleo.herdarObra) */
+    var info = PLANTA_INFO, sessao = OBRA;
+    var herdar = (!opc.pendencias && info && navigator.onLine)
+      ? Nucleo.herdarObra(o, info, { listar: listarPasta, baixarInicio: baixarInicio, baixarFaixa: baixarFaixa, identidade: Nucleo.identidadeDaPlanta(html),
+          cancelado: function(){ return OBRA !== sessao; },
+          baixarTudo: function(url){ return fetch(url).then(function(r){ if(!r.ok) throw new Error("download " + r.status); return r.text(); }); } },
+          function(i, n, item){ mensagem("Abrindo " + o.nome + "…", "Trazendo o que já foi feito na obra · envio " + (i + 1) + " de " + n + " (" + mb(item.size) + " MB)"); })
+        .catch(function(e){ registro("herança " + o.id + ": " + (e.message || e)); return { herdou: false, erro: e.message || String(e) }; })
+      : Promise.resolve(null);
+    herdar.then(function(h){
+    if(OBRA !== sessao) return;
+    if(h && h.herdou) registro("herança " + o.id + ": " + h.pecas + " peça(s), " + h.ocs + " ocorrência(s), " + h.fotos + " foto(s) de " + (h.de || "?") + " (" + h.arquivo + ")");
     Nucleo.nomeDoLiderNaPlanta(o, perfil(), ctxObras(), PLANTA_INFO);
     faixaEnvio();
     $("planta").onload = function(){ setTimeout(faixaEnvio, 300); };
     $("planta").srcdoc = html.slice(0, fim) + INJETAR + html.slice(fim);
     registro("abriu " + o.id + (opc.pendencias ? " (só para enviar o que ficou)" : ""));
+    if(h && h.herdou){
+      aviso("<b>Você continuou a obra de onde " + esc(h.de || h.autor || "o líder anterior") + " parou.</b><br>" + h.pecas + " peça(s) marcada(s), "
+        + h.ocs + " ocorrência(s) e " + h.fotos + " foto(s) vieram para este aparelho. As fotos já estão enviadas: não precisa tirar de novo.", "ok",
+        [{ txt: "OK", fn: function(){ aviso(null); } }]);
+    } else if(h && h.erro){
+      aviso("<b>Não consegui trazer o que já foi feito nesta obra.</b> " + esc(h.erro) + "<br>Não marque nada ainda: feche, procure sinal e abra a obra de novo. Se continuar, avise o Gustavo.", "erro",
+        [{ txt: "OK", fn: function(){ aviso(null); } }]);
+    }
     if(opc.pendencias){ AVISOU_TROCA = o.id;
       aviso("<b>" + esc(opc.lider || "Outra pessoa") + " é o líder desta obra agora.</b><br>Envie o que ficou no seu aparelho (ENVIAR) e não marque nada novo.", "erro",
         [{ txt: "OK", fn: function(){ aviso(null); } }]); }
+    });
   });
 }
 
