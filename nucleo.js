@@ -885,14 +885,50 @@ function gravarFotosNaPlanta(banco, fotos){
     r.onerror = function(){ falha(r.error || new Error("não abriu o banco da planta")); };
   });
 }
+/* 25/11/2026 (tarde) — VOLTA do líder / revezamento (Fábio <-> Danilo): o teste do Gustavo mostrou que quem
+   RETOMA a obra num aparelho que já tem dados não recebia nada do outro. Agora, se o último envio confirmado é de
+   OUTRA pessoa (e ainda não foi juntado neste aparelho), o aparelho JUNTA, sem apagar nada:
+     - peça: o que o outro concluiu (ou iniciou) e aqui está pendente/sem registro entra; concluída aqui fica;
+       andamento aqui e concluída lá -> concluída (a do outro). Pendente lá e feita aqui -> fica feita (igual à Rotina);
+     - ocorrência: a que não existe aqui entra (como enviada); a que já existe aqui fica como está;
+     - foto: toda foto já enviada da obra que não está aqui (pelo nome) entra como JÁ ENVIADA.
+   O que o aparelho tem e ainda não enviou continua lá e sai no próximo ENVIAR. */
+function juntarReg(meu, deles){
+  var n = 0, out = meu || {};
+  Object.keys(deles || {}).forEach(function(k){
+    var e = deles[k] || {}, d = out[k], se = e.st || "pendente", sd = (d && d.st) || "pendente";
+    if(se === "pendente") return;
+    if(sd === "pendente" || (sd === "andamento" && se === "concluido")){ out[k] = JSON.parse(JSON.stringify(e)); n++; }
+  });
+  return n;
+}
+function juntarOc(meu, deles, agora){
+  var n = 0, out = (meu && typeof meu === "object" && !Array.isArray(meu)) ? meu : {};
+  if(deles && !Array.isArray(deles)) Object.keys(deles).forEach(function(k){
+    var e = deles[k]; if(!e || !e.txt || out[k]) return;
+    var c = JSON.parse(JSON.stringify(e)); c.enviada = true; c.enviadaEm = c.enviadaEm || agora; out[k] = c; n++;
+  });
+  return { oc: out, n: n };
+}
+function chaveFoto(f){ return f.nome || [f.peca, f.alvo || "", f.quando || ""].join("|"); }
+function mesmaPessoa(env, eu){
+  if(!eu) return false;
+  if(env.autorEmail && eu.email) return String(env.autorEmail).toLowerCase() === String(eu.email).toLowerCase();
+  return !!(env.lider && eu.nome && String(env.lider).toLowerCase() === String(eu.nome).toLowerCase());
+}
 function herdarObra(o, info, deps, aoProgresso){
   if(!info) return Promise.resolve({ herdou: false, motivo: "planta sem adaptador" });
   return Promise.all([lerEstadoPlanta(info), fotosDoBanco(info.banco)]).then(function(x){
     var est = x[0], fotosJa = x[1];
     if(fotosJa === null) return { herdou: false, motivo: "não deu para ler as fotos do aparelho" };
-    if((est && est.marcadas) || (fotosJa && fotosJa.length)) return { herdou: false, motivo: "aparelho já tem dados desta obra" };
+    var temDados = !!((est && est.marcadas) || (fotosJa && fotosJa.length));
+    var jaJuntado = null; try{ jaJuntado = JSON.parse(localStorage.getItem(info.chave + ":herdado") || "null"); }catch(e){}
     return ultimoEnvioConfirmado(o, deps).then(function(env){
       if(!env.achou) return { herdou: false, motivo: env.motivo || "nenhum envio" };
+      if(temDados){
+        if(mesmaPessoa(env, deps.eu)) return { herdou: false, motivo: "o último envio é deste líder" };
+        if(jaJuntado && jaJuntado.arquivo === env.arquivo) return { herdou: false, motivo: "esse envio já foi juntado" };
+      }
       var m = contarMarcas(env.reg, env.oc);
       if(!m.pecas && !m.ocs) return { herdou: false, motivo: "último envio sem nada marcado" };
       /* fotos: todas as já enviadas desta planta (cada envio leva só as novas) */
@@ -902,21 +938,23 @@ function herdarObra(o, info, deps, aoProgresso){
         return fotosSincronizadas(o.id).then(function(s){ return { rs: rs, fotos: s.fotos }; });
       }).then(function(y){
         if(y.rs.falhas && y.rs.falhas.some(function(f){ return f.tipo !== "arquivo_ruim"; }))
-          throw new Error("não baixei todos os envios da obra (" + y.rs.falhas.length + " falha(s) de rede). Nada foi herdado; tente com sinal melhor.");
-        var fotos = (y.fotos || []).filter(function(f){ return f.blob && f.peca; });
+          throw new Error("não baixei todos os envios da obra (" + y.rs.falhas.length + " falha(s) de rede). Nada foi trazido; tente com sinal melhor.");
+        var tem = {}; (fotosJa || []).forEach(function(f){ tem[chaveFoto(f)] = 1; });
+        var fotos = (y.fotos || []).filter(function(f){ if(!f.blob || !f.peca || tem[chaveFoto(f)]) return false; tem[chaveFoto(f)] = 1; return true; });
         /* 1º as fotos: se falharem, nada de peças (igual ao RECUPERAR da planta) */
         return gravarFotosNaPlanta(info.banco, fotos).then(function(nf){
           var d = null; try{ d = JSON.parse(localStorage.getItem(info.chave) || "null"); }catch(e){}
           if(!d || typeof d !== "object") d = { v: 1, lider: "", reg: {}, ocultos: {} };
-          var agora = new Date().toISOString(), oc = env.oc || {};
-          if(!Array.isArray(oc)) Object.keys(oc).forEach(function(k){ if(oc[k] && oc[k].txt){ oc[k].enviada = true; oc[k].enviadaEm = oc[k].enviadaEm || agora; } });
-          d.v = d.v || 1; d.reg = env.reg || {}; d.ocultos = d.ocultos || {}; if(!d.lider) d.lider = env.lider || "";
+          var agora = new Date().toISOString(), ocAqui = null;
+          try{ ocAqui = JSON.parse(localStorage.getItem(info.chave + ":oc") || "null"); }catch(e){}
+          d.v = d.v || 1; d.reg = d.reg || {}; d.ocultos = d.ocultos || {}; if(!d.lider) d.lider = env.lider || "";
+          var np = juntarReg(d.reg, env.reg || {}), jo = juntarOc(ocAqui, env.oc || {}, agora);
           var h = { de: env.lider || null, autor: env.autor || null, arquivo: env.arquivo, exportadoEm: env.exportadoEm || null,
-                    em: agora, pecas: m.pecas, ocs: m.ocs, fotos: nf };
+                    em: agora, modo: temDados ? "juntou" : "herdou", pecas: temDados ? np : m.pecas, ocs: temDados ? jo.n : m.ocs, fotos: nf };
           localStorage.setItem(info.chave, JSON.stringify(d));
-          localStorage.setItem(info.chave + ":oc", JSON.stringify(oc));
+          localStorage.setItem(info.chave + ":oc", JSON.stringify(jo.oc));
           localStorage.setItem(info.chave + ":herdado", JSON.stringify(h));
-          return { herdou: true, de: h.de, autor: h.autor, arquivo: h.arquivo, pecas: m.pecas, ocs: m.ocs, fotos: nf };
+          return { herdou: true, modo: h.modo, de: h.de, autor: h.autor, arquivo: h.arquivo, pecas: h.pecas, ocs: h.ocs, fotos: nf };
         });
       });
     });

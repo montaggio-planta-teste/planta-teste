@@ -725,7 +725,7 @@ function abrirObra(o, opc){
     /* 25/11/2026: troca de líder / aparelho novo -> a planta começa de onde o último envio parou (Nucleo.herdarObra) */
     var info = PLANTA_INFO, sessao = OBRA;
     var herdar = (!opc.pendencias && info && navigator.onLine)
-      ? Nucleo.herdarObra(o, info, { listar: listarPasta, baixarInicio: baixarInicio, baixarFaixa: baixarFaixa, identidade: Nucleo.identidadeDaPlanta(html),
+      ? Nucleo.herdarObra(o, info, { listar: listarPasta, baixarInicio: baixarInicio, baixarFaixa: baixarFaixa, identidade: Nucleo.identidadeDaPlanta(html), eu: { email: perfil().email, nome: perfil().nome },
           cancelado: function(){ return OBRA !== sessao; },
           baixarTudo: function(url){ return fetch(url).then(function(r){ if(!r.ok) throw new Error("download " + r.status); return r.text(); }); } },
           function(i, n, item){ mensagem("Abrindo " + o.nome + "…", "Trazendo o que já foi feito na obra · envio " + (i + 1) + " de " + n + " (" + mb(item.size) + " MB)"); })
@@ -740,7 +740,10 @@ function abrirObra(o, opc){
     $("planta").srcdoc = html.slice(0, fim) + INJETAR + html.slice(fim);
     registro("abriu " + o.id + (opc.pendencias ? " (só para enviar o que ficou)" : ""));
     if(h && h.herdou){
-      aviso("<b>Você continuou a obra de onde " + esc(h.de || h.autor || "o líder anterior") + " parou.</b><br>" + h.pecas + " peça(s) marcada(s), "
+      aviso(h.modo === "juntou"
+        ? "<b>Você retomou a obra: o que " + esc(h.de || h.autor || "o outro líder") + " fez veio para este aparelho.</b><br>" + h.pecas + " peça(s), "
+          + h.ocs + " ocorrência(s) e " + h.fotos + " foto(s) novas. Nada do que você já tinha foi apagado."
+        : "<b>Você continuou a obra de onde " + esc(h.de || h.autor || "o líder anterior") + " parou.</b><br>" + h.pecas + " peça(s) marcada(s), "
         + h.ocs + " ocorrência(s) e " + h.fotos + " foto(s) vieram para este aparelho. As fotos já estão enviadas: não precisa tirar de novo.", "ok",
         [{ txt: "OK", fn: function(){ aviso(null); } }]);
     } else if(h && h.erro){
